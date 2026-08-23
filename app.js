@@ -1,33 +1,294 @@
 "use strict";
-const DB_NAME="eliteFinanceV2",STORE="state",STATE_KEY="main",GIST_FILE="elitefinance-data-v2.json",TOKEN_KEY="eliteFinanceGistTokenV2";
-const DEFAULT={version:"2.0",updatedAt:new Date().toISOString(),theme:"light",currency:"VND",profile:{name:"Elite"},accounts:[{id:"cash",name:"Tiền mặt",type:"cash",opening:0},{id:"bank",name:"Ngân hàng",type:"bank",opening:0}],transactions:[],budgets:[],goals:[],categories:["Ăn uống","Di chuyển","Mua sắm","Nhà ở","Điện nước","Sức khỏe","Giáo dục","Giải trí","Du lịch","Gia đình","Lương","Thưởng","Khác"],sync:{gistId:"",autoPush:false,lastSync:"",deviceName:"iPhone"}};
-const clone=x=>JSON.parse(JSON.stringify(x));
-let state=clone(DEFAULT),page="dashboard",selectedMonth=new Date().toISOString().slice(0,7),syncing=false;
-const $=id=>document.getElementById(id),uid=()=>crypto.randomUUID?.()||Date.now()+"-"+Math.random(),esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])),money=n=>new Intl.NumberFormat("vi-VN",{style:"currency",currency:state.currency||"VND",maximumFractionDigits:0}).format(Number(n)||0),today=()=>new Date().toISOString().slice(0,10);
-function openDB(){return new Promise((ok,no)=>{const r=indexedDB.open(DB_NAME,1);r.onupgradeneeded=()=>r.result.objectStoreNames.contains(STORE)||r.result.createObjectStore(STORE);r.onsuccess=()=>ok(r.result);r.onerror=()=>no(r.error)})}async function load(){const db=await openDB();return new Promise((ok,no)=>{const r=db.transaction(STORE).objectStore(STORE).get(STATE_KEY);r.onsuccess=()=>ok(r.result||clone(DEFAULT));r.onerror=()=>no(r.error)})}async function save(skipSync=false){state.updatedAt=new Date().toISOString();const db=await openDB();await new Promise((ok,no)=>{const r=db.transaction(STORE,"readwrite").objectStore(STORE).put(state,STATE_KEY);r.onsuccess=ok;r.onerror=()=>no(r.error)});if(!skipSync&&state.sync?.autoPush&&state.sync.gistId&&getToken())gistPush(true).catch(()=>{})}
-function getToken(){return localStorage.getItem(TOKEN_KEY)||""}function setToken(v){v?localStorage.setItem(TOKEN_KEY,v):localStorage.removeItem(TOKEN_KEY)}function toast(t){$("toast").textContent=t;$("toast").classList.add("show");setTimeout(()=>$("toast").classList.remove("show"),1900)}
-const NAV=[["dashboard","⌂","Dashboard"],["transactions","↔","Giao dịch"],["accounts","▣","Tài khoản"],["budgets","◎","Ngân sách"],["goals","★","Mục tiêu"],["reports","▥","Báo cáo"],["sync","☁","Gist Sync"],["settings","⚙","Cài đặt"]];function initNav(){NAV.forEach(n=>{const b=document.createElement("button");b.dataset.page=n[0];b.textContent=`${n[1]}  ${n[2]}`;$("nav").appendChild(b)})}function go(id){page=id;document.querySelectorAll(".page").forEach(x=>x.classList.toggle("hidden",x.id!==id));document.querySelectorAll("nav button").forEach(x=>x.classList.toggle("active",x.dataset.page===id));$("pageTitle").textContent=NAV.find(x=>x[0]===id)?.[2]||id;({dashboard,transactions:renderTransactions,accounts:renderAccounts,budgets:renderBudgets,goals:renderGoals,reports:renderReports,sync:renderSync,settings:renderSettings}[id]||(()=>{}))();closeMenu()}
-function txMonth(m=selectedMonth){return state.transactions.filter(t=>t.date?.slice(0,7)===m)}function totals(list=txMonth()){const income=list.filter(t=>t.type==="income").reduce((s,t)=>s+Number(t.amount),0),expense=list.filter(t=>t.type==="expense").reduce((s,t)=>s+Number(t.amount),0);return{income,expense,saving:income-expense,rate:income?Math.round((income-expense)/income*100):0}}function accountBalance(id){const a=state.accounts.find(x=>x.id===id);return Number(a?.opening||0)+state.transactions.reduce((s,t)=>s+(t.accountId===id?(t.type==="income"?Number(t.amount):-Number(t.amount)):0),0)}function catIcon(c){return{"Ăn uống":"🍜","Di chuyển":"🛵","Mua sắm":"🛍","Nhà ở":"🏠","Điện nước":"💡","Sức khỏe":"❤","Giáo dục":"📚","Giải trí":"🎬","Du lịch":"✈","Gia đình":"👪","Lương":"💼","Thưởng":"🎁"}[c]||"•"}function categoryTotals(m=selectedMonth){const o={};txMonth(m).filter(t=>t.type==="expense").forEach(t=>o[t.category]=(o[t.category]||0)+Number(t.amount));return Object.entries(o).map(([category,value])=>({category,value})).sort((a,b)=>b.value-a.value)}
-function txRow(t){return `<article class="tx" data-tx="${t.id}"><div class="tx-icon">${catIcon(t.category)}</div><div class="tx-main"><b>${esc(t.note||t.category)}</b><small>${esc(t.category)} · ${esc(state.accounts.find(a=>a.id===t.accountId)?.name||"")} · ${t.date}</small></div><div class="tx-money ${t.type==="income"?"green":"red"}">${t.type==="income"?"+":"-"}${money(t.amount)}</div><div class="tx-controls"><button data-action="duplicate" data-id="${t.id}">⧉ Nhân bản</button><button data-action="edit" data-id="${t.id}">✎ Sửa</button><button data-action="delete" data-id="${t.id}">✕ Xóa</button></div><div class="swipe-actions"><button class="edit" data-action="edit" data-id="${t.id}">Sửa</button><button class="delete" data-action="delete" data-id="${t.id}">Xóa</button></div></article>`}
-function dashboard(){const t=totals(),todayTx=state.transactions.filter(x=>x.date===today()),todayTotal=todayTx.filter(x=>x.type==="expense").reduce((s,x)=>s+Number(x.amount),0),list=[...txMonth()].sort((a,b)=>(b.date+b.createdAt).localeCompare(a.date+a.createdAt)).slice(0,6),cats=categoryTotals(),max=Math.max(1,...cats.map(x=>x.value)),weekAgo=new Date(Date.now()-6*864e5).toISOString().slice(0,10),week=state.transactions.filter(x=>x.date>=weekAgo&&x.date<=today()&&x.type==="expense").reduce((s,x)=>s+Number(x.amount),0);$("dashboard").innerHTML=`<div class="hero"><div><small class="eyebrow">TỔNG QUAN THÁNG</small><h2>${new Date(selectedMonth+"-01T00:00:00").toLocaleDateString("vi-VN",{month:"long",year:"numeric"})}</h2><p>Ghi nhanh, kiểm soát ngân sách và đồng bộ qua GitHub Gist.</p><div class="actions"><input id="monthPick" type="month" value="${selectedMonth}" style="max-width:170px"><button class="btn" data-action="open-add">＋ Giao dịch</button></div></div><div class="ring" style="--angle:${Math.max(0,Math.min(100,t.rate))*3.6}deg"><div><b>${t.rate}%</b><small>Tiết kiệm</small></div></div></div><div class="grid"><div class="card kpi"><div class="ico green">↗</div><small>Tổng thu</small><div class="amount green">${money(t.income)}</div></div><div class="card kpi"><div class="ico red">↘</div><small>Tổng chi</small><div class="amount red">${money(t.expense)}</div></div><div class="card kpi today-card"><div class="ico">◷</div><small>Chi hôm nay</small><div class="amount">${money(todayTotal)}</div></div><div class="card kpi"><div class="ico violet">▤</div><small>Chi 7 ngày</small><div class="amount violet">${money(week)}</div></div></div><div class="grid2"><div class="card"><div class="head"><h2>Giao dịch gần đây</h2><button class="btn" data-action="nav-transactions">Xem tất cả</button></div><div class="list">${list.length?list.map(txRow).join(""):'<div class="empty">Chưa có giao dịch.</div>'}</div></div><div class="card"><div class="head"><h2>Chi theo danh mục</h2></div>${cats.length?cats.slice(0,6).map(x=>`<div class="bar-row"><div class="bar-top"><span>${catIcon(x.category)} ${esc(x.category)}</span><b>${money(x.value)}</b></div><div class="bar"><span style="width:${x.value/max*100}%"></span></div></div>`).join(""):'<div class="empty">Chưa có dữ liệu chi.</div>'}</div></div>`;$("monthPick").onchange=e=>{selectedMonth=e.target.value;dashboard()};enableSwipe()}
-function renderTransactions(){const list=[...txMonth()].sort((a,b)=>(b.date+(b.createdAt||"")).localeCompare(a.date+(a.createdAt||"")));$("transactions").innerHTML=`<div class="card"><div class="head"><div><small class="eyebrow">SỔ THU CHI</small><h2>Giao dịch</h2></div><button class="primary" data-action="open-add">＋ Thêm</button></div><div class="filters"><input id="filterMonth" type="month" value="${selectedMonth}"><select id="filterType"><option value="all">Tất cả loại</option><option value="expense">Khoản chi</option><option value="income">Khoản thu</option></select><select id="filterCat"><option value="all">Tất cả danh mục</option>${state.categories.map(c=>`<option>${esc(c)}</option>`)}</select><input id="filterQ" placeholder="Tìm ghi chú..."></div><div id="txList" class="list">${list.length?list.map(txRow).join(""):'<div class="empty">Chưa có giao dịch.</div>'}</div></div>`;const filter=()=>{const m=$("filterMonth").value,type=$("filterType").value,cat=$("filterCat").value,q=$("filterQ").value.toLowerCase();const a=state.transactions.filter(t=>t.date.slice(0,7)===m&&(type==="all"||t.type===type)&&(cat==="all"||t.category===cat)&&`${t.note} ${t.category}`.toLowerCase().includes(q)).sort((a,b)=>b.date.localeCompare(a.date));$("txList").innerHTML=a.length?a.map(txRow).join(""):'<div class="empty">Không có kết quả.</div>';enableSwipe()};["filterMonth","filterType","filterCat","filterQ"].forEach(id=>$(id).oninput=filter)}
-function openTx(id,duplicate=false){const found=state.transactions.find(t=>t.id===id),t=found?{...found}: {type:"expense",date:today(),amount:"",category:"Ăn uống",accountId:state.accounts[0]?.id||"",note:""};if(duplicate){t.id="";t.date=today();t.createdAt=""}showModal(id&&!duplicate?"SỬA GIAO DỊCH":"GIAO DỊCH MỚI",id&&!duplicate?"Cập nhật giao dịch":"Thêm giao dịch",`<form id="txForm" class="form-grid"><label>Loại<select name="type"><option value="expense" ${t.type==="expense"?"selected":""}>Khoản chi</option><option value="income" ${t.type==="income"?"selected":""}>Khoản thu</option></select></label><label>Ngày<input name="date" type="date" value="${t.date}" required></label><label>Số tiền<input name="amount" inputmode="numeric" type="number" min="0" step="1000" value="${t.amount}" required autofocus></label><label>Danh mục<select name="category">${state.categories.map(c=>`<option ${c===t.category?"selected":""}>${esc(c)}</option>`)}</select></label><label>Tài khoản<select name="accountId">${state.accounts.map(a=>`<option value="${a.id}" ${a.id===t.accountId?"selected":""}>${esc(a.name)}</option>`)}</select></label><label class="wide">Ghi chú<input name="note" value="${esc(t.note||"")}" placeholder="Ví dụ: Cafe với đồng nghiệp"></label><button class="primary wide">${id&&!duplicate?"Lưu thay đổi":"Thêm giao dịch"}</button></form>`);$("txForm").onsubmit=async e=>{e.preventDefault();const f=Object.fromEntries(new FormData(e.target)),item={...t,...f,amount:Number(f.amount),id:id&&!duplicate?id:uid(),createdAt:t.createdAt||new Date().toISOString()};state.transactions=id&&!duplicate?state.transactions.map(x=>x.id===id?item:x):[...state.transactions,item];await save();closeModal();go(page);toast(id&&!duplicate?"Đã sửa giao dịch":"Đã thêm giao dịch")}}
-async function deleteTx(id){const t=state.transactions.find(x=>x.id===id);if(!t)return;showModal("XÁC NHẬN","Xóa giao dịch?",`<p><b>${esc(t.note||t.category)}</b></p><p class="red">${money(t.amount)}</p><div class="actions"><button class="btn" data-action="close-modal">Hủy</button><button class="danger" id="confirmDelete">Xóa</button></div>`);$("confirmDelete").onclick=async()=>{state.transactions=state.transactions.filter(x=>x.id!==id);await save();closeModal();go(page);toast("Đã xóa giao dịch")}}
-function renderAccounts(){$("accounts").innerHTML=`<div class="head"><div><small class="eyebrow">VÍ & NGÂN HÀNG</small><h2>Tài khoản</h2></div><button class="primary" data-action="add-account">＋ Thêm</button></div><div class="account-grid">${state.accounts.map(a=>`<div class="account-card"><span class="badge">${a.type==="cash"?"Tiền mặt":a.type==="ewallet"?"Ví điện tử":"Ngân hàng"}</span><h3>${esc(a.name)}</h3><div class="amount">${money(accountBalance(a.id))}</div><small>Số dư ban đầu ${money(a.opening)}</small><div class="actions"><button class="btn" data-action="edit-account" data-id="${a.id}">Sửa</button>${state.accounts.length>1?`<button class="btn" data-action="delete-account" data-id="${a.id}">Xóa</button>`:""}</div></div>`).join("")}</div>`}function openAccount(id){const a=state.accounts.find(x=>x.id===id)||{name:"",type:"bank",opening:0};showModal("TÀI KHOẢN",id?"Sửa tài khoản":"Thêm tài khoản",`<form id="accountForm" class="form-grid"><label>Tên<input name="name" value="${esc(a.name)}" required></label><label>Loại<select name="type"><option value="cash" ${a.type==="cash"?"selected":""}>Tiền mặt</option><option value="bank" ${a.type==="bank"?"selected":""}>Ngân hàng</option><option value="ewallet" ${a.type==="ewallet"?"selected":""}>Ví điện tử</option></select></label><label class="wide">Số dư đầu kỳ<input name="opening" type="number" inputmode="numeric" step="1000" value="${a.opening}"></label><button class="primary wide">Lưu</button></form>`);$("accountForm").onsubmit=async e=>{e.preventDefault();const f=Object.fromEntries(new FormData(e.target)),item={...a,...f,opening:Number(f.opening),id:id||uid()};state.accounts=id?state.accounts.map(x=>x.id===id?item:x):[...state.accounts,item];await save();closeModal();renderAccounts();toast("Đã lưu tài khoản")}}
-function budgetSpent(b){return txMonth().filter(t=>t.type==="expense"&&t.category===b.category).reduce((s,t)=>s+Number(t.amount),0)}function renderBudgets(){$("budgets").innerHTML=`<div class="head"><div><small class="eyebrow">KIỂM SOÁT CHI</small><h2>Ngân sách ${selectedMonth}</h2></div><button class="primary" data-action="add-budget">＋ Tạo</button></div><div class="budget-grid">${state.budgets.length?state.budgets.map(b=>{const s=budgetSpent(b),p=Math.min(100,Math.round(s/Math.max(1,b.limit)*100));return `<div class="budget-card"><div class="head"><h3>${catIcon(b.category)} ${esc(b.category)}</h3><span class="badge">${p}%</span></div><b>${money(s)} / ${money(b.limit)}</b><div class="bar ${p>=100?"over":""}"><span style="width:${p}%"></span></div><small>${p>=100?"Đã đạt/vượt giới hạn":`Còn ${money(b.limit-s)}`}</small><div class="actions"><button class="btn" data-action="edit-budget" data-id="${b.id}">Sửa</button><button class="btn" data-action="delete-budget" data-id="${b.id}">Xóa</button></div></div>`}).join(""):'<div class="card empty">Chưa có ngân sách tháng.</div>'}</div>`}function openBudget(id){const b=state.budgets.find(x=>x.id===id)||{category:"Ăn uống",limit:0};showModal("NGÂN SÁCH",id?"Sửa ngân sách":"Tạo ngân sách",`<form id="budgetForm" class="form-grid"><label>Danh mục<select name="category">${state.categories.filter(c=>!["Lương","Thưởng"].includes(c)).map(c=>`<option ${c===b.category?"selected":""}>${esc(c)}</option>`)}</select></label><label>Giới hạn<input name="limit" type="number" inputmode="numeric" min="0" step="1000" value="${b.limit}" required></label><button class="primary wide">Lưu</button></form>`);$("budgetForm").onsubmit=async e=>{e.preventDefault();const f=Object.fromEntries(new FormData(e.target)),item={...b,...f,limit:Number(f.limit),id:id||uid()};state.budgets=id?state.budgets.map(x=>x.id===id?item:x):[...state.budgets,item];await save();closeModal();renderBudgets();toast("Đã lưu ngân sách")}}
-function renderGoals(){$("goals").innerHTML=`<div class="head"><div><small class="eyebrow">TÍCH LŨY</small><h2>Mục tiêu tài chính</h2></div><button class="primary" data-action="add-goal">＋ Thêm</button></div><div class="goal-grid">${state.goals.length?state.goals.map(g=>{const p=Math.min(100,Math.round(g.saved/Math.max(1,g.target)*100));return `<div class="goal-card"><span class="badge">${g.deadline||"Không hạn"}</span><h3>${esc(g.name)}</h3><div class="amount blue">${money(g.saved)}</div><small>Mục tiêu ${money(g.target)}</small><div class="bar"><span style="width:${p}%"></span></div><small>${p}% hoàn thành</small><div class="actions"><button class="primary" data-action="fund-goal" data-id="${g.id}">＋ Nạp</button><button class="btn" data-action="edit-goal" data-id="${g.id}">Sửa</button><button class="btn" data-action="delete-goal" data-id="${g.id}">Xóa</button></div></div>`}).join(""):'<div class="card empty">Chưa có mục tiêu. Gợi ý: Quỹ cưới, quỹ khẩn cấp, du lịch.</div>'}</div>`}function openGoal(id){const g=state.goals.find(x=>x.id===id)||{name:"",target:0,saved:0,deadline:""};showModal("MỤC TIÊU",id?"Sửa mục tiêu":"Thêm mục tiêu",`<form id="goalForm" class="form-grid"><label>Tên<input name="name" value="${esc(g.name)}" placeholder="Quỹ cưới" required></label><label>Mục tiêu<input name="target" type="number" inputmode="numeric" step="1000" value="${g.target}" required></label><label>Đã có<input name="saved" type="number" inputmode="numeric" step="1000" value="${g.saved}"></label><label>Ngày dự kiến<input name="deadline" type="date" value="${g.deadline}"></label><button class="primary wide">Lưu</button></form>`);$("goalForm").onsubmit=async e=>{e.preventDefault();const f=Object.fromEntries(new FormData(e.target)),item={...g,...f,target:Number(f.target),saved:Number(f.saved),id:id||uid()};state.goals=id?state.goals.map(x=>x.id===id?item:x):[...state.goals,item];await save();closeModal();renderGoals()}}
-function fundGoal(id){const g=state.goals.find(x=>x.id===id);showModal("TÍCH LŨY",`Nạp vào ${esc(g.name)}`,`<form id="fundForm" class="form-grid"><label class="wide">Số tiền<input name="amount" type="number" inputmode="numeric" step="1000" required></label><button class="primary wide">Cộng vào mục tiêu</button></form>`);$("fundForm").onsubmit=async e=>{e.preventDefault();g.saved+=Number(new FormData(e.target).get("amount"));await save();closeModal();renderGoals();toast("Đã cập nhật mục tiêu")}}
-function donutStyle(cats){const colors=["var(--blue)","var(--cyan)","var(--amber)","var(--violet)","var(--green)","var(--red)"],sum=cats.reduce((s,x)=>s+x.value,0)||1;let at=0;return cats.slice(0,6).map((x,i)=>{const from=at,to=at+x.value/sum*100;at=to;return `${colors[i]} ${from}% ${to}%`}).join(",")||"var(--soft) 0 100%"}function renderReports(){const cats=categoryTotals(),months=[...new Set(state.transactions.map(t=>t.date.slice(0,7)))].sort().reverse(),rows=months.map(m=>({m,...totals(txMonth(m))}));$("reports").innerHTML=`<div class="grid2"><div class="card"><div class="head"><h2>Phân bổ tháng</h2></div><div class="donut-wrap"><div class="donut" style="background:conic-gradient(${donutStyle(cats)})"></div><div class="legend">${cats.slice(0,6).map(x=>`<div><span>${catIcon(x.category)} ${esc(x.category)}</span><b>${money(x.value)}</b></div>`).join("")||'<div class="empty">Chưa có dữ liệu</div>'}</div></div></div><div class="card"><div class="head"><h2>Xuất dữ liệu</h2></div><p class="warning">CSV phù hợp để mở trong Excel. JSON dùng để sao lưu toàn bộ app.</p><div class="actions"><button class="btn" data-action="export-csv">Xuất CSV</button><button class="btn" data-action="export-json">Xuất JSON</button></div></div></div><div class="card"><div class="head"><h2>Theo tháng</h2></div>${rows.length?`<table class="table"><thead><tr><th>Tháng</th><th>Thu</th><th>Chi</th><th>Tiết kiệm</th></tr></thead><tbody>${rows.map(r=>`<tr><td>${r.m}</td><td class="green">${money(r.income)}</td><td class="red">${money(r.expense)}</td><td>${money(r.saving)}</td></tr>`).join("")}</tbody></table>`:'<div class="empty">Chưa có dữ liệu.</div>'}</div>`}
-function renderSync(){const configured=!!(state.sync?.gistId&&getToken());$("sync").innerHTML=`<div class="grid2"><div class="card"><small class="eyebrow">GITHUB GIST</small><h2>Đồng bộ nhiều thiết bị</h2><div class="sync-box"><div class="sync-state"><i class="dot ${configured?"ok":""}"></i><b>${configured?"Đã cấu hình":"Chưa cấu hình"}</b></div><small>${state.sync.lastSync?`Lần đồng bộ: ${new Date(state.sync.lastSync).toLocaleString("vi-VN")}`:"Chưa đồng bộ"}</small></div><form id="syncForm" class="form-grid"><label class="wide">GitHub token<input name="token" type="password" value="${esc(getToken())}" autocomplete="off" placeholder="Token có quyền Gist"></label><label class="wide">Gist ID<input name="gistId" value="${esc(state.sync.gistId||"")}" placeholder="Để trống nếu muốn tạo Gist mới"></label><label>Tên thiết bị<input name="deviceName" value="${esc(state.sync.deviceName||"")}" placeholder="iPhone"></label><label>Tự đẩy sau khi thay đổi<select name="autoPush"><option value="false" ${!state.sync.autoPush?"selected":""}>Tắt</option><option value="true" ${state.sync.autoPush?"selected":""}>Bật</option></select></label><button class="primary wide">Lưu cấu hình</button></form><div class="actions"><button class="primary" data-action="gist-push">↑ Đẩy lên Gist</button><button class="btn" data-action="gist-pull">↓ Tải từ Gist</button><button class="btn" data-action="gist-create">＋ Tạo Gist mới</button></div></div><div class="card"><small class="eyebrow">LƯU Ý BẢO MẬT</small><h2>Token được lưu trên thiết bị</h2><p class="warning">Không chia sẻ token. Không commit token vào GitHub Pages. Gist Sync dùng cơ chế dữ liệu mới nhất ghi đè dữ liệu cũ, vì vậy nên tải về trước khi nhập trên thiết bị mới.</p><h3>Quy trình khuyên dùng</h3><ol><li>Trên thiết bị có dữ liệu mới nhất: Đẩy lên Gist.</li><li>Trên thiết bị còn lại: Tải từ Gist.</li><li>Sau khi chỉnh sửa, tiếp tục Đẩy lên Gist.</li></ol><button class="danger" data-action="clear-token">Xóa token khỏi thiết bị</button></div></div>`;$("syncForm").onsubmit=async e=>{e.preventDefault();const f=Object.fromEntries(new FormData(e.target));setToken(f.token.trim());state.sync={...state.sync,gistId:f.gistId.trim(),deviceName:f.deviceName.trim(),autoPush:f.autoPush==="true"};await save(true);renderSync();updateSyncBadge();toast("Đã lưu cấu hình Gist")}}
-async function gistRequest(path,options={}){const token=getToken();if(!token)throw Error("Chưa nhập GitHub token");const r=await fetch(`https://api.github.com${path}`,{...options,headers:{Accept:"application/vnd.github+json",Authorization:`Bearer ${token}`,"X-GitHub-Api-Version":"2022-11-28","Content-Type":"application/json",...(options.headers||{})}});if(!r.ok){const x=await r.json().catch(()=>({}));throw Error(x.message||`GitHub API ${r.status}`)}return r.status===204?{}:r.json()}
-async function gistCreate(){if(syncing)return;syncing=true;syncStatus("busy","Đang tạo Gist...");try{const clean=exportDataObject(),x=await gistRequest("/gists",{method:"POST",body:JSON.stringify({description:"EliteFinance V1.1 Sync",public:false,files:{[GIST_FILE]:{content:JSON.stringify(clean,null,2)}}})});state.sync.gistId=x.id;state.sync.lastSync=new Date().toISOString();await save(true);renderSync();updateSyncBadge();toast("Đã tạo Gist bí mật")}catch(e){toast(e.message)}finally{syncing=false}}
-async function gistPush(silent=false){if(syncing)return;const id=state.sync?.gistId;if(!id){if(!silent)toast("Chưa có Gist ID");return}syncing=true;if(!silent)syncStatus("busy","Đang đẩy dữ liệu...");try{const clean=exportDataObject();await gistRequest(`/gists/${encodeURIComponent(id)}`,{method:"PATCH",body:JSON.stringify({files:{[GIST_FILE]:{content:JSON.stringify(clean,null,2)}}})});state.sync.lastSync=new Date().toISOString();await save(true);updateSyncBadge();if(page==="sync")renderSync();if(!silent)toast("Đã đẩy dữ liệu lên Gist")}catch(e){if(!silent)toast(e.message)}finally{syncing=false}}
-async function gistPull(){if(syncing)return;const id=state.sync?.gistId;if(!id)return toast("Chưa có Gist ID");syncing=true;syncStatus("busy","Đang tải dữ liệu...");try{const x=await gistRequest(`/gists/${encodeURIComponent(id)}`),file=x.files?.[GIST_FILE];if(!file)throw Error(`Gist không có file ${GIST_FILE}`);let content=file.content;if(file.truncated&&file.raw_url){const r=await fetch(file.raw_url);content=await r.text()}const incoming=JSON.parse(content),d=incoming.data||incoming;if(!Array.isArray(d.transactions)||!Array.isArray(d.accounts))throw Error("Dữ liệu Gist không hợp lệ");const keepToken=getToken();state={...clone(DEFAULT),...d,sync:{...clone(DEFAULT.sync),...(d.sync||{}),gistId:id,lastSync:new Date().toISOString()}};setToken(keepToken);await save(true);document.body.className=state.theme||"light";updateSyncBadge();go("dashboard");toast("Đã tải dữ liệu từ Gist")}catch(e){toast(e.message)}finally{syncing=false}}
-function exportDataObject(){const d=clone(state);d.sync={...d.sync,lastSync:new Date().toISOString()};return{app:"EliteFinance",version:"2.0",exportedAt:new Date().toISOString(),data:d}}
-function syncStatus(cls,text){const badge=$("syncBadge");if(badge)badge.textContent=text}function updateSyncBadge(){$("syncBadge").textContent=state.sync?.lastSync?`Sync ${new Date(state.sync.lastSync).toLocaleDateString("vi-VN")}`:state.sync?.gistId?"Gist đã cấu hình":"Chỉ lưu trên thiết bị"}
-function renderSettings(){$("settings").innerHTML=`<div class="grid2"><div class="card"><small class="eyebrow">TÙY CHỈNH</small><h2>Hồ sơ & giao diện</h2><form id="prefsForm" class="form-grid"><label>Tên<input name="name" value="${esc(state.profile.name||"")}"></label><label>Tiền tệ<select name="currency"><option value="VND" ${state.currency==="VND"?"selected":""}>VND</option><option value="USD" ${state.currency==="USD"?"selected":""}>USD</option><option value="CNY" ${state.currency==="CNY"?"selected":""}>CNY</option></select></label><label>Giao diện<select name="theme"><option value="light" ${state.theme==="light"?"selected":""}>Light</option><option value="dark" ${state.theme==="dark"?"selected":""}>Dark</option></select></label><button class="primary wide">Lưu</button></form></div><div class="card"><small class="eyebrow">BACKUP</small><h2>Nhập / xuất thủ công</h2><div class="actions"><button class="btn" data-action="export-json">Xuất JSON</button><label class="btn">Nhập JSON<input id="importJson" type="file" hidden accept=".json,application/json"></label></div><p class="warning">JSON không chứa GitHub token. Sau khi nhập trên thiết bị khác, nhập lại token trong Gist Sync.</p></div></div><div class="card"><small class="eyebrow">DỮ LIỆU</small><h2>Quản lý dữ liệu</h2><div class="actions"><button class="danger" data-action="reset-all">Xóa toàn bộ dữ liệu</button></div></div>`;$("prefsForm").onsubmit=async e=>{e.preventDefault();const f=Object.fromEntries(new FormData(e.target));state.profile.name=f.name.trim()||"Elite";state.currency=f.currency;state.theme=f.theme;document.body.className=state.theme;await save();toast("Đã lưu cài đặt")};$("importJson").onchange=importJSON}
-function exportJSON(){download(`EliteFinance-V2.0-${today()}.json`,JSON.stringify(exportDataObject(),null,2),"application/json")}function exportCSV(){const header="date,type,amount,category,account,note\n",rows=state.transactions.map(t=>[t.date,t.type,t.amount,t.category,state.accounts.find(a=>a.id===t.accountId)?.name||"",t.note||""].map(v=>'"'+String(v).replace(/"/g,'""')+'"').join(",")).join("\n");download("EliteFinance-Transactions.csv","\ufeff"+header+rows,"text/csv")}function download(name,text,type){const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([text],{type}));a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)}function importJSON(e){const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=async()=>{try{const x=JSON.parse(r.result),d=x.data||x;if(!Array.isArray(d.transactions)||!Array.isArray(d.accounts))throw Error();const token=getToken(),gistId=state.sync?.gistId||"";state={...clone(DEFAULT),...d,sync:{...clone(DEFAULT.sync),...(d.sync||{}),gistId}};setToken(token);await save(true);go("dashboard");toast("Đã nhập JSON")}catch{toast("File JSON không hợp lệ")}e.target.value=""};r.readAsText(f,"UTF-8")}
-function showModal(kind,title,body){$("modalKind").textContent=kind;$("modalTitle").textContent=title;$("modalBody").innerHTML=body;$("modal").classList.remove("hidden")}function closeModal(){$("modal").classList.add("hidden");$("modalBody").innerHTML=""}function openMenu(){document.body.classList.add("menu");$("drawerShade").classList.remove("hidden")}function closeMenu(){document.body.classList.remove("menu");$("drawerShade").classList.add("hidden")}
-function enableSwipe(){document.querySelectorAll(".tx").forEach(row=>{let startX=0,startY=0;row.addEventListener("touchstart",e=>{startX=e.touches[0].clientX;startY=e.touches[0].clientY},{passive:true});row.addEventListener("touchend",e=>{const dx=e.changedTouches[0].clientX-startX,dy=e.changedTouches[0].clientY-startY;if(Math.abs(dx)>65&&Math.abs(dx)>Math.abs(dy)){document.querySelectorAll(".tx.reveal").forEach(x=>x!==row&&x.classList.remove("reveal"));row.classList.toggle("reveal",dx<0)}})})}
-async function handleAction(action,id){if(action==="open-add")openTx();else if(action==="nav-transactions")go("transactions");else if(action==="edit")openTx(id);else if(action==="duplicate")openTx(id,true);else if(action==="delete")deleteTx(id);else if(action==="close-modal")closeModal();else if(action==="add-account")openAccount();else if(action==="edit-account")openAccount(id);else if(action==="delete-account"){if(state.transactions.some(t=>t.accountId===id))return toast("Tài khoản đang có giao dịch");if(confirm("Xóa tài khoản?")){state.accounts=state.accounts.filter(x=>x.id!==id);await save();renderAccounts()}}else if(action==="add-budget")openBudget();else if(action==="edit-budget")openBudget(id);else if(action==="delete-budget"){state.budgets=state.budgets.filter(x=>x.id!==id);await save();renderBudgets()}else if(action==="add-goal")openGoal();else if(action==="edit-goal")openGoal(id);else if(action==="fund-goal")fundGoal(id);else if(action==="delete-goal"){state.goals=state.goals.filter(x=>x.id!==id);await save();renderGoals()}else if(action==="export-json")exportJSON();else if(action==="export-csv")exportCSV();else if(action==="gist-create")gistCreate();else if(action==="gist-push")gistPush();else if(action==="gist-pull")gistPull();else if(action==="clear-token"){setToken("");renderSync();updateSyncBadge();toast("Đã xóa token") }else if(action==="reset-all"){if(confirm("Xóa toàn bộ dữ liệu trên thiết bị?")){const sync=state.sync,theme=state.theme;state={...clone(DEFAULT),sync,theme};await save(true);go("dashboard");toast("Đã xóa dữ liệu")}}}
-async function init(){try{state={...clone(DEFAULT),...(await load())};state.sync={...clone(DEFAULT.sync),...(state.sync||{})}}catch(e){console.error(e);toast("Không mở được kho dữ liệu")};document.body.className=state.theme||"light";initNav();document.addEventListener("click",e=>{const nav=e.target.closest("nav button[data-page]");if(nav)return go(nav.dataset.page);const a=e.target.closest("[data-action]");if(a){e.preventDefault();handleAction(a.dataset.action,a.dataset.id)}});$("headerAdd").onclick=$("fab").onclick=()=>openTx();$("menuBtn").onclick=openMenu;$("drawerShade").onclick=closeMenu;$("closeModal").onclick=closeModal;$("modal").onclick=e=>{if(e.target===$("modal"))closeModal()};$("themeBtn").onclick=async()=>{state.theme=state.theme==="dark"?"light":"dark";document.body.className=state.theme;await save(true)};updateSyncBadge();go("dashboard");if("serviceWorker"in navigator&&location.protocol.startsWith("http"))navigator.serviceWorker.register("service-worker.js").catch(()=>{})}init();
+
+const DB_NAME = "eliteFinanceV2";
+const STORE_NAME = "state";
+const STATE_KEY = "main";
+
+const DEFAULT_STATE = {
+  version: "2.0-categories",
+  theme: "light",
+  currency: "VND",
+  profile: { name: "Elite" },
+  accounts: [
+    { id: "cash", name: "Tiền mặt", type: "cash", opening: 0 },
+    { id: "bank", name: "Ngân hàng", type: "bank", opening: 0 }
+  ],
+  transactions: [],
+  budgets: [],
+  goals: [],
+  categories: [
+    "🍜 Ăn uống",
+    "🛵 Di chuyển",
+    "🏠 Nhà ở",
+    "💡 Điện nước",
+    "🛍 Mua sắm",
+    "📚 Học tập",
+    "🎬 Giải trí",
+    "✈ Du lịch",
+    "❤️ Gia đình",
+    "🛡 Bảo hiểm",
+    "🏡 Phường / Họ",
+    "💳 Trả góp",
+    "🏦 Trả nợ",
+    "📈 Đầu tư",
+    "💼 Lương",
+    "🎁 Thưởng",
+    "📦 Khác"
+  ]
+};
+
+let state = JSON.parse(JSON.stringify(DEFAULT_STATE));
+let currentPage = "dashboard";
+let selectedMonth = new Date().toISOString().slice(0, 7);
+
+const $ = id => document.getElementById(id);
+const uid = () => crypto.randomUUID?.() || `${Date.now()}-${Math.random()}`;
+const esc = value => String(value ?? "").replace(/[&<>"']/g, char => ({
+  "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+}[char]));
+const money = value => new Intl.NumberFormat("vi-VN", {
+  style: "currency",
+  currency: state.currency || "VND",
+  maximumFractionDigits: 0
+}).format(Number(value) || 0);
+
+function openDatabase() {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(DB_NAME, 1);
+    request.onupgradeneeded = () => {
+      if (!request.result.objectStoreNames.contains(STORE_NAME)) {
+        request.result.createObjectStore(STORE_NAME);
+      }
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+async function loadState() {
+  const db = await openDatabase();
+  return new Promise((resolve, reject) => {
+    const request = db.transaction(STORE_NAME).objectStore(STORE_NAME).get(STATE_KEY);
+    request.onsuccess = () => resolve(request.result || JSON.parse(JSON.stringify(DEFAULT_STATE)));
+    request.onerror = () => reject(request.error);
+  });
+}
+
+async function saveState() {
+  const db = await openDatabase();
+  return new Promise((resolve, reject) => {
+    const request = db.transaction(STORE_NAME, "readwrite").objectStore(STORE_NAME).put(state, STATE_KEY);
+    request.onsuccess = resolve;
+    request.onerror = () => reject(request.error);
+  });
+}
+
+function migrateCategories() {
+  const mandatory = [...DEFAULT_STATE.categories];
+  const old = Array.isArray(state.categories) ? state.categories : [];
+  const used = new Set((state.transactions || []).map(item => item.category).filter(Boolean));
+  const oldStillUsed = old.filter(category => used.has(category) && !mandatory.includes(category));
+  state.categories = [...mandatory, ...oldStillUsed];
+}
+
+function toast(message) {
+  const node = $("toast");
+  if (!node) return;
+  node.textContent = message;
+  node.classList.add("show");
+  setTimeout(() => node.classList.remove("show"), 1800);
+}
+
+function categoryIcon(category) {
+  const match = String(category || "").match(/^[^\p{L}\p{N}\s]+/u);
+  return match ? match[0].trim() : "•";
+}
+
+function monthTransactions(month = selectedMonth) {
+  return state.transactions.filter(item => item.date?.slice(0, 7) === month);
+}
+
+function totals(items = monthTransactions()) {
+  const income = items.filter(item => item.type === "income").reduce((sum, item) => sum + Number(item.amount), 0);
+  const expense = items.filter(item => item.type === "expense").reduce((sum, item) => sum + Number(item.amount), 0);
+  return { income, expense, saving: income - expense, rate: income ? Math.round((income - expense) / income * 100) : 0 };
+}
+
+function accountBalance(id) {
+  const account = state.accounts.find(item => item.id === id);
+  return Number(account?.opening || 0) + state.transactions.reduce((sum, item) => {
+    if (item.accountId !== id) return sum;
+    return sum + (item.type === "income" ? Number(item.amount) : -Number(item.amount));
+  }, 0);
+}
+
+const NAV = [
+  ["dashboard", "⌂", "Dashboard"],
+  ["transactions", "↔", "Giao dịch"],
+  ["accounts", "▣", "Tài khoản"],
+  ["budgets", "◎", "Ngân sách"],
+  ["goals", "★", "Mục tiêu"],
+  ["reports", "▥", "Báo cáo"],
+  ["settings", "⚙", "Cài đặt"]
+];
+
+function buildNavigation() {
+  const nav = $("nav");
+  if (!nav) return;
+  nav.innerHTML = "";
+  NAV.forEach(([id, icon, label]) => {
+    const button = document.createElement("button");
+    button.dataset.page = id;
+    button.textContent = `${icon}  ${label}`;
+    button.onclick = () => go(id);
+    nav.appendChild(button);
+  });
+}
+
+function go(id) {
+  currentPage = id;
+  document.querySelectorAll(".page").forEach(page => page.classList.toggle("hidden", page.id !== id));
+  document.querySelectorAll("nav button").forEach(button => button.classList.toggle("active", button.dataset.page === id));
+  if ($("pageTitle")) $("pageTitle").textContent = NAV.find(item => item[0] === id)?.[2] || id;
+  const renderers = {
+    dashboard: renderDashboard,
+    transactions: renderTransactions,
+    accounts: renderAccounts,
+    budgets: renderBudgets,
+    goals: renderGoals,
+    reports: renderReports,
+    settings: renderSettings
+  };
+  renderers[id]?.();
+  document.body.classList.remove("menu");
+}
+
+function transactionRow(item) {
+  return `<div class="tx" data-transaction="${item.id}">
+    <div class="tx-icon">${categoryIcon(item.category)}</div>
+    <div><b>${esc(item.note || item.category)}</b><small>${esc(item.category)} · ${esc(state.accounts.find(account => account.id === item.accountId)?.name || "")} · ${esc(item.date)}</small></div>
+    <div class="money ${item.type === "income" ? "green" : "red"}">${item.type === "income" ? "+" : "-"}${money(item.amount)}</div>
+    <div class="tx-actions"><button data-action="edit" data-id="${item.id}">✎ Sửa</button><button data-action="delete" data-id="${item.id}">✕ Xóa</button></div>
+  </div>`;
+}
+
+function categoryTotals() {
+  const map = {};
+  monthTransactions().filter(item => item.type === "expense").forEach(item => {
+    map[item.category] = (map[item.category] || 0) + Number(item.amount);
+  });
+  return Object.entries(map).map(([category, value]) => ({ category, value })).sort((a, b) => b.value - a.value);
+}
+
+function renderDashboard() {
+  const summary = totals();
+  const recent = [...monthTransactions()].sort((a, b) => `${b.date}${b.createdAt || ""}`.localeCompare(`${a.date}${a.createdAt || ""}`)).slice(0, 6);
+  const categories = categoryTotals();
+  const maximum = Math.max(1, ...categories.map(item => item.value));
+  $("dashboard").innerHTML = `<div class="hero"><div><div class="eyebrow">TỔNG QUAN TÀI CHÍNH</div><h2>${new Date(`${selectedMonth}-01T00:00:00`).toLocaleDateString("vi-VN", { month: "long", year: "numeric" })}</h2><p>Theo dõi thu, chi, tiết kiệm và mục tiêu.</p><div class="month-select"><input id="monthPick" type="month" value="${selectedMonth}"><button class="btn" data-nav="transactions">Xem giao dịch</button></div></div><div class="progress-ring" style="--angle:${Math.max(0, Math.min(100, summary.rate)) * 3.6}deg"><div><b>${summary.rate}%</b><small>Tỷ lệ tiết kiệm</small></div></div></div>
+  <div class="grid"><div class="card kpi"><div class="icon green">↗</div><small>Tổng thu</small><div class="amount green">${money(summary.income)}</div></div><div class="card kpi"><div class="icon red">↘</div><small>Tổng chi</small><div class="amount red">${money(summary.expense)}</div></div><div class="card kpi"><div class="icon blue">◆</div><small>Tiết kiệm</small><div class="amount blue">${money(summary.saving)}</div></div><div class="card kpi"><div class="icon amber">▣</div><small>Tổng số dư</small><div class="amount amber">${money(state.accounts.reduce((sum, account) => sum + accountBalance(account.id), 0))}</div></div></div>
+  <div class="grid2"><div class="card"><div class="head"><h2>Giao dịch gần đây</h2></div><div class="list">${recent.length ? recent.map(transactionRow).join("") : '<div class="empty">Chưa có giao dịch.</div>'}</div></div><div class="card"><div class="head"><h2>Chi theo danh mục</h2></div>${categories.length ? categories.slice(0, 7).map(item => `<div class="bar-row"><div class="bar-row-top"><span>${categoryIcon(item.category)} ${esc(item.category)}</span><b>${money(item.value)}</b></div><div class="bar"><span style="width:${item.value / maximum * 100}%"></span></div></div>`).join("") : '<div class="empty">Chưa có dữ liệu chi.</div>'}</div></div>`;
+  $("monthPick").onchange = event => { selectedMonth = event.target.value; renderDashboard(); };
+  $("dashboard").querySelector("[data-nav]")?.addEventListener("click", event => go(event.currentTarget.dataset.nav));
+}
+
+function renderTransactions() {
+  const list = [...monthTransactions()].sort((a, b) => `${b.date}${b.createdAt || ""}`.localeCompare(`${a.date}${a.createdAt || ""}`));
+  $("transactions").innerHTML = `<div class="card"><div class="head"><div><div class="eyebrow">SỔ THU CHI</div><h2>Giao dịch</h2></div><button class="primary" id="addTransaction">＋ Thêm</button></div><div class="filters"><input id="filterMonth" type="month" value="${selectedMonth}"><select id="filterType"><option value="all">Tất cả loại</option><option value="expense">Khoản chi</option><option value="income">Khoản thu</option></select><select id="filterCategory"><option value="all">Tất cả danh mục</option>${state.categories.map(category => `<option>${esc(category)}</option>`).join("")}</select><input id="filterSearch" placeholder="Tìm ghi chú..."></div><div id="transactionList" class="list">${list.length ? list.map(transactionRow).join("") : '<div class="empty">Chưa có giao dịch.</div>'}</div></div>`;
+  $("addTransaction").onclick = () => openTransaction();
+  const filter = () => {
+    const month = $("filterMonth").value;
+    const type = $("filterType").value;
+    const category = $("filterCategory").value;
+    const query = $("filterSearch").value.toLowerCase();
+    const filtered = state.transactions.filter(item => item.date.slice(0, 7) === month && (type === "all" || item.type === type) && (category === "all" || item.category === category) && `${item.note || ""} ${item.category}`.toLowerCase().includes(query));
+    $("transactionList").innerHTML = filtered.length ? filtered.map(transactionRow).join("") : '<div class="empty">Không có kết quả.</div>';
+  };
+  ["filterMonth", "filterType", "filterCategory", "filterSearch"].forEach(id => $(id).oninput = filter);
+}
+
+function openTransaction(id) {
+  const item = state.transactions.find(transaction => transaction.id === id) || { type: "expense", date: new Date().toISOString().slice(0, 10), amount: "", category: state.categories[0], accountId: state.accounts[0]?.id || "", note: "" };
+  showModal(id ? "SỬA GIAO DỊCH" : "GIAO DỊCH MỚI", id ? "Cập nhật giao dịch" : "Thêm giao dịch", `<form id="transactionForm" class="form-grid"><label>Loại<select name="type"><option value="expense" ${item.type === "expense" ? "selected" : ""}>Khoản chi</option><option value="income" ${item.type === "income" ? "selected" : ""}>Khoản thu</option></select></label><label>Ngày<input name="date" type="date" value="${item.date}" required></label><label>Số tiền<input name="amount" type="number" inputmode="numeric" min="0" step="1000" value="${item.amount}" required></label><label>Danh mục<select name="category">${state.categories.map(category => `<option ${category === item.category ? "selected" : ""}>${esc(category)}</option>`).join("")}</select></label><label>Tài khoản<select name="accountId">${state.accounts.map(account => `<option value="${account.id}" ${account.id === item.accountId ? "selected" : ""}>${esc(account.name)}</option>`).join("")}</select></label><label class="wide">Ghi chú<input name="note" value="${esc(item.note || "")}"></label><button class="primary wide">${id ? "Lưu thay đổi" : "Thêm giao dịch"}</button></form>`);
+  $("transactionForm").onsubmit = async event => {
+    event.preventDefault();
+    const data = Object.fromEntries(new FormData(event.target));
+    const updated = { ...item, ...data, amount: Number(data.amount), id: id || uid(), createdAt: item.createdAt || new Date().toISOString() };
+    state.transactions = id ? state.transactions.map(transaction => transaction.id === id ? updated : transaction) : [...state.transactions, updated];
+    await saveState(); closeModal(); go(currentPage); toast(id ? "Đã sửa giao dịch" : "Đã thêm giao dịch");
+  };
+}
+
+async function deleteTransaction(id) {
+  const item = state.transactions.find(transaction => transaction.id === id);
+  if (!item) return;
+  showModal("XÁC NHẬN", "Xóa giao dịch?", `<p><b>${esc(item.note || item.category)}</b></p><p class="red">${money(item.amount)}</p><div class="actions"><button class="btn" id="cancelDelete">Hủy</button><button class="danger" id="confirmDelete">Xóa</button></div>`);
+  $("cancelDelete").onclick = closeModal;
+  $("confirmDelete").onclick = async () => { state.transactions = state.transactions.filter(transaction => transaction.id !== id); await saveState(); closeModal(); go(currentPage); toast("Đã xóa giao dịch"); };
+}
+
+function renderAccounts() {
+  $("accounts").innerHTML = `<div class="head"><div><div class="eyebrow">VÍ & NGÂN HÀNG</div><h2>Tài khoản</h2></div><button class="primary" id="addAccount">＋ Thêm</button></div><div class="account-grid">${state.accounts.map(account => `<div class="account-card"><span class="badge">${account.type === "cash" ? "Tiền mặt" : account.type === "ewallet" ? "Ví điện tử" : "Ngân hàng"}</span><h3>${esc(account.name)}</h3><div class="balance">${money(accountBalance(account.id))}</div><small>Số dư đầu kỳ: ${money(account.opening)}</small><div class="actions"><button class="btn" data-account-edit="${account.id}">Sửa</button></div></div>`).join("")}</div>`;
+  $("addAccount").onclick = () => openAccount();
+  document.querySelectorAll("[data-account-edit]").forEach(button => button.onclick = () => openAccount(button.dataset.accountEdit));
+}
+
+function openAccount(id) {
+  const account = state.accounts.find(item => item.id === id) || { name: "", type: "bank", opening: 0 };
+  showModal("TÀI KHOẢN", id ? "Sửa tài khoản" : "Thêm tài khoản", `<form id="accountForm" class="form-grid"><label>Tên<input name="name" value="${esc(account.name)}" required></label><label>Loại<select name="type"><option value="cash" ${account.type === "cash" ? "selected" : ""}>Tiền mặt</option><option value="bank" ${account.type === "bank" ? "selected" : ""}>Ngân hàng</option><option value="ewallet" ${account.type === "ewallet" ? "selected" : ""}>Ví điện tử</option></select></label><label class="wide">Số dư đầu kỳ<input name="opening" type="number" value="${account.opening}"></label><button class="primary wide">Lưu</button></form>`);
+  $("accountForm").onsubmit = async event => { event.preventDefault(); const data = Object.fromEntries(new FormData(event.target)); const updated = { ...account, ...data, opening: Number(data.opening), id: id || uid() }; state.accounts = id ? state.accounts.map(item => item.id === id ? updated : item) : [...state.accounts, updated]; await saveState(); closeModal(); renderAccounts(); };
+}
+
+function renderBudgets() {
+  $("budgets").innerHTML = `<div class="head"><div><div class="eyebrow">KIỂM SOÁT CHI</div><h2>Ngân sách</h2></div><button class="primary" id="addBudget">＋ Tạo</button></div><div class="budget-grid">${state.budgets.length ? state.budgets.map(budget => { const spent = monthTransactions().filter(item => item.type === "expense" && item.category === budget.category).reduce((sum, item) => sum + Number(item.amount), 0); const percent = Math.min(100, Math.round(spent / Math.max(1, budget.limit) * 100)); return `<div class="budget-card"><h3>${esc(budget.category)}</h3><b>${money(spent)} / ${money(budget.limit)}</b><div class="bar"><span style="width:${percent}%"></span></div><small>${percent}% đã dùng</small></div>`; }).join("") : '<div class="card empty">Chưa có ngân sách.</div>'}</div>`;
+  $("addBudget").onclick = () => { showModal("NGÂN SÁCH", "Tạo ngân sách", `<form id="budgetForm" class="form-grid"><label>Danh mục<select name="category">${state.categories.map(category => `<option>${esc(category)}</option>`).join("")}</select></label><label>Giới hạn<input name="limit" type="number" required></label><button class="primary wide">Lưu</button></form>`); $("budgetForm").onsubmit = async event => { event.preventDefault(); const data = Object.fromEntries(new FormData(event.target)); state.budgets.push({ id: uid(), category: data.category, limit: Number(data.limit) }); await saveState(); closeModal(); renderBudgets(); }; };
+}
+
+function renderGoals() {
+  $("goals").innerHTML = `<div class="head"><div><div class="eyebrow">MỤC TIÊU TÀI CHÍNH</div><h2>Mục tiêu</h2></div><button class="primary" id="addGoal">＋ Thêm</button></div><div class="goal-grid">${state.goals.length ? state.goals.map(goal => `<div class="goal-card"><h3>${esc(goal.name)}</h3><div class="balance">${money(goal.saved)}</div><small>Mục tiêu ${money(goal.target)}</small><div class="bar"><span style="width:${Math.min(100, goal.saved / Math.max(1, goal.target) * 100)}%"></span></div></div>`).join("") : '<div class="card empty">Chưa có mục tiêu.</div>'}</div>`;
+  $("addGoal").onclick = () => { showModal("MỤC TIÊU", "Thêm mục tiêu", `<form id="goalForm" class="form-grid"><label>Tên<input name="name" required></label><label>Mục tiêu<input name="target" type="number" required></label><label>Đã có<input name="saved" type="number" value="0"></label><label>Ngày dự kiến<input name="deadline" type="date"></label><button class="primary wide">Lưu</button></form>`); $("goalForm").onsubmit = async event => { event.preventDefault(); const data = Object.fromEntries(new FormData(event.target)); state.goals.push({ ...data, id: uid(), target: Number(data.target), saved: Number(data.saved) }); await saveState(); closeModal(); renderGoals(); }; };
+}
+
+function renderReports() {
+  const months = [...new Set(state.transactions.map(item => item.date.slice(0, 7)))].sort().reverse();
+  $("reports").innerHTML = `<div class="card"><div class="head"><h2>Báo cáo theo tháng</h2><button class="btn" id="exportCsv">Xuất CSV</button></div>${months.length ? `<table class="summary-table"><thead><tr><th>Tháng</th><th>Thu</th><th>Chi</th><th>Tiết kiệm</th></tr></thead><tbody>${months.map(month => { const item = totals(monthTransactions(month)); return `<tr><td>${month}</td><td>${money(item.income)}</td><td>${money(item.expense)}</td><td>${money(item.saving)}</td></tr>`; }).join("")}</tbody></table>` : '<div class="empty">Chưa có dữ liệu.</div>'}</div>`;
+  $("exportCsv").onclick = exportCSV;
+}
+
+function renderSettings() {
+  $("settings").innerHTML = `<div class="grid2"><div class="card"><h2>Giao diện & tiền tệ</h2><form id="settingsForm" class="form-grid"><label>Tên<input name="name" value="${esc(state.profile.name)}"></label><label>Tiền tệ<select name="currency"><option value="VND">VND</option><option value="USD">USD</option><option value="CNY">CNY</option></select></label><button class="primary wide">Lưu</button></form></div><div class="card"><h2>Sao lưu</h2><div class="actions"><button class="primary" id="exportJson">Xuất JSON</button><label class="btn">Nhập JSON<input hidden id="importJson" type="file" accept=".json"></label></div></div></div>`;
+  $("settingsForm").currency.value = state.currency;
+  $("settingsForm").onsubmit = async event => { event.preventDefault(); const data = Object.fromEntries(new FormData(event.target)); state.profile.name = data.name || "Elite"; state.currency = data.currency; await saveState(); toast("Đã lưu cài đặt"); };
+  $("exportJson").onclick = exportJSON;
+  $("importJson").onchange = importJSON;
+}
+
+function exportJSON() { download(`EliteFinance-Backup-${new Date().toISOString().slice(0, 10)}.json`, JSON.stringify({ app: "EliteFinance", version: "2.0", data: state }, null, 2), "application/json"); }
+function exportCSV() { const header = "date,type,amount,category,account,note\n"; const rows = state.transactions.map(item => [item.date, item.type, item.amount, item.category, state.accounts.find(account => account.id === item.accountId)?.name || "", item.note || ""].map(value => `"${String(value).replace(/"/g, '""')}"`).join(",")).join("\n"); download("EliteFinance-Transactions.csv", `\ufeff${header}${rows}`, "text/csv"); }
+function download(name, text, type) { const anchor = document.createElement("a"); anchor.href = URL.createObjectURL(new Blob([text], { type })); anchor.download = name; anchor.click(); setTimeout(() => URL.revokeObjectURL(anchor.href), 1000); }
+function importJSON(event) { const file = event.target.files[0]; if (!file) return; const reader = new FileReader(); reader.onload = async () => { try { const parsed = JSON.parse(reader.result); const incoming = parsed.data || parsed; if (!Array.isArray(incoming.transactions) || !Array.isArray(incoming.accounts)) throw Error(); state = { ...JSON.parse(JSON.stringify(DEFAULT_STATE)), ...incoming }; migrateCategories(); await saveState(); go("dashboard"); toast("Đã nhập dữ liệu"); } catch { toast("JSON không hợp lệ"); } event.target.value = ""; }; reader.readAsText(file, "UTF-8"); }
+
+function showModal(eyebrow, title, body) { const eyebrowNode = $("modalEyebrow") || $("modalKind"); if (eyebrowNode) eyebrowNode.textContent = eyebrow; $("modalTitle").textContent = title; $("modalBody").innerHTML = body; $("modal").classList.remove("hidden"); }
+function closeModal() { $("modal").classList.add("hidden"); $("modalBody").innerHTML = ""; }
+
+async function init() {
+  try { state = { ...JSON.parse(JSON.stringify(DEFAULT_STATE)), ...(await loadState()) }; migrateCategories(); await saveState(); } catch (error) { console.error(error); toast("Không mở được dữ liệu"); }
+  document.body.className = state.theme || "light";
+  buildNavigation();
+  document.addEventListener("click", event => {
+    const edit = event.target.closest("[data-action='edit']");
+    const remove = event.target.closest("[data-action='delete']");
+    if (edit) openTransaction(edit.dataset.id);
+    if (remove) deleteTransaction(remove.dataset.id);
+  });
+  if ($("menuBtn")) $("menuBtn").onclick = () => document.body.classList.toggle("menu");
+  if ($("quickAdd")) $("quickAdd").onclick = () => openTransaction();
+  if ($("headerAdd")) $("headerAdd").onclick = () => openTransaction();
+  if ($("fab")) $("fab").onclick = () => openTransaction();
+  if ($("closeModal")) $("closeModal").onclick = closeModal;
+  if ($("themeBtn")) $("themeBtn").onclick = async () => { state.theme = state.theme === "dark" ? "light" : "dark"; document.body.className = state.theme; await saveState(); };
+  go("dashboard");
+  if ("serviceWorker" in navigator && location.protocol.startsWith("http")) navigator.serviceWorker.register("service-worker.js").catch(() => {});
+}
+
+init();
